@@ -43,6 +43,11 @@ body[data-lay="split"] .main{flex-direction:row}
 .brand b{font:700 20px/1 var(--f-label);letter-spacing:.14em}
 .brand span{font:500 15px var(--f-label);letter-spacing:.06em;color:var(--mute);text-transform:uppercase;white-space:nowrap}
 .tools{display:flex;gap:6px;flex-wrap:nowrap}
+.speedbar{flex:none;display:flex;align-items:center;justify-content:center;gap:6px}
+.speedbar .splab{font:700 12px var(--f-label);letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin-right:4px}
+.speedbar .sp{padding:4px 12px;min-width:46px;justify-content:center}
+.speedbar .sp b{font:700 13px var(--f-label);min-width:2.4em;text-align:left}
+.speedbar.fast #spPlay{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .tbtn{display:inline-flex;align-items:center;gap:8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;font:600 14px var(--f-label);letter-spacing:.06em;text-transform:uppercase}
 .tbtn:hover{border-color:#47505e}
 .tbtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -188,6 +193,12 @@ body.compact .acc .note{display:none}
       <button class="tbtn" id="btnSet">Settings</button>
     </div>
   </header>
+  <div class="speedbar" id="speedbar" role="group" aria-label="Simulation speed">
+    <span class="splab">Speed</span>
+    <button class="tbtn sp" id="spSlow" aria-label="Slower" title="Slower"><svg viewBox="0 0 24 24"><path d="M11 6v12L2 12zM22 6v12l-9-6z" fill="currentColor"/></svg></button>
+    <button class="tbtn sp" id="spPlay" aria-label="Normal speed" title="Normal speed (1x)"><svg viewBox="0 0 24 24"><path d="M7 5v14l12-7z" fill="currentColor"/></svg><b id="spVal">1x</b></button>
+    <button class="tbtn sp" id="spFast" aria-label="Faster" title="Faster"><svg viewBox="0 0 24 24"><path d="M13 6v12l9-6zM2 6v12l9-6z" fill="currentColor"/></svg></button>
+  </div>
 
   <div class="main" id="main">
   <section class="boardcol" id="boardcol" aria-label="Scoreboard">
@@ -254,7 +265,7 @@ body.compact .acc .note{display:none}
   <div>
     <h3>Simulator</h3>
     <label for="cSpeed" style="font-size:13px;color:var(--mute)">Clock speed</label>
-    <select class="sel" id="cSpeed"><option value="1">Normal (1x)</option><option value="5">5x</option><option value="10">10x</option><option value="60">60x</option></select>
+    <select class="sel" id="cSpeed"><option value="1">Normal (1x)</option><option value="2">2x</option><option value="5">5x</option><option value="10">10x</option><option value="30">30x</option><option value="60">60x</option><option value="120">120x</option></select>
     <div class="btnrow" style="margin-top:12px">
       <button class="tbtn" id="bCycle">Power cycle</button>
       <button class="tbtn" id="bClear">Erase saved data</button>
@@ -484,7 +495,7 @@ const GROUPS=['RINK A','RINK B','RINK C'];
 function defaults(){
   const to=Array(10).fill(null);to[0]={len:30,warn:10,useWarn:true,disp:false};
   return {model:'871',penTO:true,penRun:true,t:0,dir:'dn',stopAt:null,period:0,running:false,
-    hs:0,gs:0,hsh:0,gsh:0,hgoal:false,ggoal:false,hp:[],gp:[],autoHorn:true,eop:false,eopStay:false,tenthShift:true,bright:true,
+    hs:0,gs:0,hsh:0,gsh:0,hgoal:false,ggoal:false,hp:[],gp:[],autoHorn:true,eop:false,eopStay:true,setLen:0,tenthShift:true,bright:true,
     auxConn:false,auxAsked:false,aux:{on:false,down:true,startStop:true,t:0,onAuxDisp:false},
     seg:{on:false,list:[],idx:0,rem:0,onBoard:false,stopEach:false},
     chrono:{keyEnabled:false,auxDisp:false},to,toa:null,shotPreset:30,shotv:null,group:null};
@@ -518,8 +529,9 @@ const hms=sec=>Math.floor(sec/3600)+':'+pad2(Math.floor(sec/60)%60)+':'+pad2(sec
 /* ============ horn ============ */
 function hornPress(src){if(!ui.on)return;if(!horn[src]){horn[src]=true;horn.t0[src]=nowMs()}hornUpdate()}
 function hornRelease(src){horn[src]=false;hornUpdate()}
-function autoHorn(ms){if(!ui.on)return;horn.autoUntil=nowMs()+ms;hornUpdate()}
-function briefHorn(ms){if(!ui.on)return;horn.briefUntil=nowMs()+ms;hornUpdate()}
+const hornMs=ms=>Math.max(300,ms/Math.max(1,CFG.speed));  /* when sped up, the horn is shortened so it stays a distinct blast */
+function autoHorn(ms){if(!ui.on)return;horn.autoUntil=nowMs()+hornMs(ms);hornUpdate()}
+function briefHorn(ms){if(!ui.on)return;horn.briefUntil=nowMs()+hornMs(ms);hornUpdate()}
 function hornUpdate(){
   const n=nowMs();let on=false;
   ['key','hand'].forEach(s=>{if(horn[s]&&n-horn.t0[s]<4000)on=true});
@@ -553,8 +565,13 @@ function tenth(){
   }
   const G=S.seg;
   if(G.on&&was&&G.list.length){
-    G.rem--;
-    if(G.rem<=0){briefHorn(1000);G.idx=(G.idx+1)%G.list.length;G.rem=G.list[G.idx]*10;if(G.stopEach)S.running=false}
+    if(!G.onBoard&&G.list.length===1){
+      /* interval horn: sounds whenever the main time is evenly divisible by the interval */
+      if(S.t>0&&S.t%(G.list[0]*10)===0){briefHorn(1000);if(G.stopEach)S.running=false}
+    }else{
+      G.rem--;
+      if(G.rem<=0){briefHorn(1000);G.idx=(G.idx+1)%G.list.length;G.rem=G.list[G.idx]*10;if(G.stopEach)S.running=false}
+    }
   }
   if(CFG.shot&&S.shotv!=null&&was&&S.shotv>0){S.shotv--;if(S.shotv===0)briefHorn(1000)}
   const a=S.toa;
@@ -733,10 +750,10 @@ function present(rq,adv){
       return true;
     };
   }else if(rq.t==='entry'){
-    const d=[];ui.screen=()=>({t:rq.render(d)});
+    const d=(rq.init||[]).slice();let pre=d.length>0;ui.screen=()=>({t:rq.render(d)});
     ui.h=k=>{
-      if(isDig(k)){if(d.length>=rq.max)err();else d.push(k.slice(1))}
-      else if(k==='no'){if(d.length)d.pop();else adv(null)}
+      if(isDig(k)){if(pre){d.length=0;pre=false}if(d.length>=rq.max)err();else d.push(k.slice(1))}
+      else if(k==='no'){if(pre){d.length=0;pre=false}else if(d.length)d.pop();else adv(null)}
       else if(k==='yes'){if(rq.validate&&!rq.validate(d)){d.length=0;err()}else adv(d.slice())}
       else return 'abort';
       return true;
@@ -764,7 +781,7 @@ function doToClear(){
 /* ============ wizards ============ */
 function* wSetTime(){
   const d=yield ent(' SET  ','MM:SS.s',d=>parseD(d,'MM:SS.s').ss<60);
-  if(d!==null){S.t=patTenths(d,'MM:SS.s');if(!S.eopStay)S.eop=false;ui.view='main'}
+  if(d!==null){S.t=patTenths(d,'MM:SS.s');S.setLen=S.t;if(!S.eopStay)S.eop=false;ui.view='main'}
   const p=yield {t:'digit',text:line('   PERIOD',S.period+'   ')};
   if(p!==null){S.period=+p;if(!S.eopStay)S.eop=false}
   ui.view='main';
@@ -838,15 +855,22 @@ function* wMisc(){
   const d=yield {t:'entry',max:2,render:d=>fit(' SHOT TIME  '+(d.length?d.join('').padStart(2,'_'):'SS')),validate:d=>+d.join('')>0};
   if(d!==null){S.shotPreset=+d.join('');S.shotv=S.shotPreset*10}
 }
-function* qAux(){S.auxConn=yield ask('DO YOU HAVE AN AUXILIARY TIME DISPLAY CONNECTED?');S.auxAsked=true}
+function* qAux(){const a=yield ask('USE AUX TIME?');S.auxConn=a;S.auxAsked=true;if(CFG.aux!==a){CFG.aux=a;saveCfg();applyCfg(true)}}
 function* qAuxTimer(){
   const A=S.aux;
   if(!A.on){if(!(yield ask('USE AUX TIMER?')))return}
   else if(!(yield ask('SET AUX TIMER?'))){if(yield ask('TURN AUX TIMER OFF?'))A.on=false;return}
-  A.down=yield ask('AUX TIMER TO COUNT DOWN?');
-  A.startStop=yield ask('START AND STOP WITH TIME CONTROL SWITCH?');
+  A.down=yield ask('USE AUX TIMER TO COUNTDOWN?');
+  A.startStop=yield ask('START/STOP WITH TIME CONTROL SWITCH?');
   const pat=A.down?'HH:MM:SS':'MM:SS';
-  const d=yield ent(' SET  ',pat,d=>{const p=parseD(d,pat);return p.mm<60&&p.ss<60});
+  /* the entry starts out showing the period length that was last set on the main clock */
+  const sec=Math.round((S.setLen||0)/10);let init=[];
+  if(sec>0){
+    const hh=Math.min(99,Math.floor(sec/3600)),mm=Math.floor(sec/60)%60,ss=sec%60,mmOnly=Math.min(59,Math.floor(sec/60));
+    init=(A.down?pad2(hh)+pad2(mm)+pad2(ss):pad2(mmOnly)+pad2(ss)).split('');
+  }
+  const eq=ent(' SET  ',pat,d=>{const p=parseD(d,pat);return p.mm<60&&p.ss<60});eq.init=init;
+  const d=yield eq;
   if(d===null)return;
   A.t=patTenths(d,pat);A.on=true;
   if(S.auxConn)A.onAuxDisp=yield ask('DISPLAY AUX TIME ON AUXILIARY TIME DISPLAY?');
@@ -880,16 +904,16 @@ function* qSeg(){
     }
     return;
   }
-  if(!(yield ask('ENABLE SEGMENT TIMER?')))return;
+  if(!(yield ask('USE INTERVAL HORN/ENABLE SEGMENT TIMER?')))return;
   G.list=[];yield* addSegs();
   if(!G.list.length){G.on=false;return}
   G.on=true;G.idx=0;G.rem=G.list[0]*10;
-  G.onBoard=yield ask('DISPLAY SEGMENT TIMER ON SCOREBOARD?');
-  G.stopEach=yield ask('STOP TIME AT EACH SEGMENT?');
+  G.onBoard=yield ask('DISPLAY SEGMENT TIMER?');
+  G.stopEach=yield ask('STOP TIME WITH SEGMENT?');
 }
 function* wOptions(){
-  if(CFG.aux&&!S.auxAsked)yield* qAux();
-  if(yield ask(S.bright?'DO YOU WANT TO SWITCH TO DIM?':'DO YOU WANT TO SWITCH TO BRIGHT?'))S.bright=!S.bright;
+  if(!S.auxAsked)yield* qAux();
+  if(yield ask(S.bright?'SWITCH TO DIM?':'SWITCH TO BRIGHT?'))S.bright=!S.bright;
   yield* qAuxTimer();
   if(S.auxConn){
     if(S.chrono.auxDisp){if(yield ask('STOP DISPLAYING CHRONOMETER TIME ON AUXILIARY TIME DISPLAY?'))S.chrono.auxDisp=false}
@@ -902,9 +926,9 @@ function* wOptions(){
       const d=yield ent(' SET  ','MM:SS',okMS);if(d!==null)S.stopAt=patTenths(d,'MM:SS');
     }
   }
-  if(S.tenthShift&&(yield ask('DISABLE .1 SEC. SHIFT TIMER?')))S.tenthShift=false;
-  if(S.eopStay){if(yield ask('END OF PERIOD TO TURN OFF UPON SETTING THE TIME?'))S.eopStay=false}
-  else if(yield ask('END OF PERIOD TO STAY ON UNTIL TIME IS STARTED?'))S.eopStay=true;
+  if(S.tenthShift&&(yield ask('DISABLE 0.1 SEC SHIFT TIMER?')))S.tenthShift=false;
+  if(S.eopStay){if(yield ask('END OF PERIOD TO TURN OFF?'))S.eopStay=false}
+  else if(yield ask('END OF PERIOD TO STAY ON?'))S.eopStay=true;
   if(yield ask('SET A BOOKMARK?')){
     if(S.running)err('TIME IS RUNNING');
     else{
@@ -919,7 +943,7 @@ function* wOptions(){
   ui.view='main';
 }
 function* wChrono(){
-  if(CFG.aux&&!S.auxAsked)yield* qAux();
+  if(!S.auxAsked)yield* qAux();
   if(S.auxConn&&(yield ask('DO YOU WANT TO DISPLAY CHRONOMETER TIME ON AUXILIARY TIME DISPLAY?')))S.chrono.auxDisp=true;
   if(!S.chrono.keyEnabled){
     if(yield ask('ENABLE CHRONOMETER KEY TO PUT CHRONOMETER TIME ON SCOREBOARD?')){S.chrono.keyEnabled=true;yield {t:'msg',text:' KEY  ENABLED   ',ms:1200}}
@@ -1090,10 +1114,23 @@ function powerOff(){
 /* ============ page wiring ============ */
 const ICON_ON='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
 const ICON_OFF='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>';
+const SPEEDS=[1,2,5,10,30,60,120];
+function speedUI(){
+  const sp=CFG.speed||1,v=$('#spVal');if(!v)return;
+  v.textContent=(Number.isInteger(sp)?sp:sp.toFixed(1))+'x';
+  $('#speedbar').classList.toggle('fast',sp!==1);
+  const i=SPEEDS.indexOf(sp);$('#spSlow').disabled=sp<=1;$('#spFast').disabled=sp>=SPEEDS[SPEEDS.length-1];
+}
+function stepSpeed(d){
+  let i=SPEEDS.indexOf(CFG.speed);
+  if(i<0){i=d>0?SPEEDS.findIndex(x=>x>CFG.speed):SPEEDS.length-1-[...SPEEDS].reverse().findIndex(x=>x<CFG.speed);if(i<0)i=d>0?SPEEDS.length-1:0}
+  else i=Math.max(0,Math.min(SPEEDS.length-1,i+d));
+  CFG.speed=SPEEDS[i];saveCfg();applyCfg();
+}
 function applyCfg(rebuild){
   document.body.classList.toggle('led',CFG.look==='led');document.body.classList.toggle('flat',CFG.look==='flat');
   $('#cTcs').checked=CFG.tcs;$('#cAux').checked=CFG.aux;$('#cShot').checked=CFG.shot;$('#cWire').checked=CFG.wireless;
-  $('#cLook').value=CFG.look;$('#cSound').checked=CFG.sound;$('#cFlash').checked=CFG.flash;$('#cSpeed').value=String(CFG.speed);
+  $('#cLook').value=CFG.look;$('#cSound').checked=CFG.sound;$('#cFlash').checked=CFG.flash;$('#cSpeed').value=String(CFG.speed);speedUI();
   const m=$('#btnMute');m.setAttribute('aria-pressed',String(CFG.sound));m.innerHTML=(CFG.sound?ICON_ON:ICON_OFF)+(CFG.sound?'Sound on':'Muted');
   if(rebuild){buildAcc();requestAnimationFrame(fitLayout)}
   if(!CFG.tcs)ui.handLatched=false;
@@ -1112,7 +1149,7 @@ function fitLayout(){
   document.documentElement.style.setProperty('--vh',H+'px');
   const cs=getComputedStyle(wrap),G=8;
   const availW=W-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);
-  const availH=H-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)-top.offsetHeight-6;
+  const sb=$('#speedbar');const availH=H-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)-top.offsetHeight-(sb?sb.offsetHeight+6:0)-6;
   const rb=(brd.offsetWidth>50&&brd.offsetHeight>10)?brd.offsetHeight/brd.offsetWidth:.3;
   const hasAcc=$('#accRow').children.length>0;
   const acc=bw=>hasAcc?Math.min(56,Math.max(18,.058*bw))+40:0;
@@ -1184,9 +1221,12 @@ function init(){
   document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closePanels));
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closePanels()});
   $('#btnMute').addEventListener('click',()=>{CFG.sound=!CFG.sound;saveCfg();applyCfg();if(CFG.sound)beep()});
-  const bind=(id,key,rb)=>$(id).addEventListener('change',e=>{CFG[key]=e.target.type==='checkbox'?e.target.checked:e.target.value;saveCfg();applyCfg(rb);if(key==='sound'&&CFG.sound)beep()});
+  const bind=(id,key,rb)=>$(id).addEventListener('change',e=>{CFG[key]=e.target.type==='checkbox'?e.target.checked:e.target.value;if(key==='aux')S.auxConn=CFG.aux;saveCfg();applyCfg(rb);if(key==='sound'&&CFG.sound)beep()});
   bind('#cTcs','tcs');bind('#cAux','aux',true);bind('#cShot','shot',true);bind('#cWire','wireless');bind('#cLook','look');bind('#cSound','sound');bind('#cFlash','flash');
-  $('#cSpeed').addEventListener('change',e=>{CFG.speed=+e.target.value;saveCfg()});
+  $('#cSpeed').addEventListener('change',e=>{CFG.speed=+e.target.value;saveCfg();speedUI()});
+  $('#spSlow').addEventListener('click',()=>stepSpeed(-1));
+  $('#spFast').addEventListener('click',()=>stepSpeed(1));
+  $('#spPlay').addEventListener('click',()=>{CFG.speed=1;saveCfg();applyCfg()});
   $('#bCycle').addEventListener('click',()=>{powerOff();setTimeout(powerOn,400);closePanels()});
   $('#bClear').addEventListener('click',()=>{['last','bm1','bm2','bm3','bm4','bm5','chrono','standby'].forEach(sdel);chronoOffset=0;$('#clrMsg').textContent='Saved data erased.'});
   window.addEventListener('pagehide',saveLast);
